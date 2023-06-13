@@ -1,0 +1,587 @@
+---
+title: "Trabajo Clasificación Estadística del conjunto de datos 'Speedating' "
+author: "Ruben"
+date: "2023-04-27"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+    
+---
+
+# Apertura de los datos y preprocesamiento estadístico
+
+```{r}
+datos <- read.csv("C:\\Users\\Cosas\\OneDrive\\Escritorio\\ESTADISTICA\\MINERIA DE DATOS\\speeddating_proyecto.csv")
+head(datos,5)
+```
+
+
+```{r}
+colSums(is.na(datos))
+datos_filtrado <- datos[rowSums(is.na(datos)) <= ncol(datos) - 60, ]
+# Eliminamos las instancias con más de 2 valores faltantes.
+```
+
+
+```{r}
+#expected_num_interested_in_me tiene 6074 datos faltantes y expected_num_matches tiene 1075, son 
+#variables que en principio no intervienen en que la persona tenga un match o no asi que los 
+#vamos a eliminar.
+datos_filtrado2 <- datos_filtrado[,-c(57,58)]
+
+#covertimos la variable género en binaria 0,1 ya que hay algunas herramientas que voy a
+#utilizar que sólo permiten valores numéricos, 0 implica femenino y 1 masculino.
+datos_filtrado2$gender <- ifelse(datos_filtrado2$gender == "female", 0, 1)
+```
+
+```{r}
+porc_perdidos <- function(x) sum(is.na(x))/length(x)
+round(100*apply(datos_filtrado2, 2, porc_perdidos), 1)
+#como el porcentaje mayor es alrededor de 6 y es una cifra relativamente pequeña, eliminamos las 
+#instancias con valores faltantes.
+
+datos_final <- na.omit(datos_filtrado2)
+
+write.csv(datos_final, file = 'speed_dating_final_data.csv')
+```
+
+# Visualización de los datos. Gráficas de variables según match
+```{r}
+library(ggplot2)
+ggplot(datos_final, aes(x = factor(match))) +
+  geom_bar() +
+  ggtitle("Valores de match y valores de no match")
+```
+Los datos según match están muy desbalanceados, esto implicaría que un modelo con todos los valores
+de match predichos con 0 tendría muy alto nivel de precisión aunque en realidad no estaría
+prediciendo 'inteligentemente'.
+
+```{r}
+#balanceamos los datos
+datos_match_0 <- datos_final[datos_final$match == 0, ]
+datos_match_1 <- datos_final[datos_final$match == 1, ]
+
+n_match_0 <- nrow(datos_match_0)
+n_match_1 <- nrow(datos_match_1)
+
+set.seed(9202) # para que los resultados sean reproducibles
+if (n_match_0 > n_match_1) {
+  datos_match_0 <- datos_match_0[sample(1:nrow(datos_match_0), n_match_1), ]
+} else {
+  datos_match_1 <- datos_match_1[sample(1:nrow(datos_match_1), n_match_0), ]
+}
+
+datos_balanceados <- rbind(datos_match_0, datos_match_1)
+
+
+# reordenamos aleatoriamente las filas
+random_indices <- sample(nrow(datos_balanceados))
+datos_balanceados <- datos_balanceados[random_indices,]
+
+
+#Normalizamos los datos para que estén en la misma escala.
+datos_final <- as.data.frame(datos_balanceados)
+
+write.csv(datos_final, 'speed_dating_data_balanced.csv', row.names = TRUE)
+datos_final_sc <- as.data.frame(scale(datos_balanceados))
+
+
+```
+HAY VARIAS FORMAS DE QUEDARNOS CON LAS CARACTERISTICAS MAS IMPORTANTES DEL DATASET:
+
+
+SELECCION STEPWISE
+
+
+SELECCION POR FUERZA BRUTA: COMO REGSUBSETS
+
+
+SELECCION POR MODELOS: COMO LASSO O RIDGE
+
+
+SELECCION POR UMBRAL DE CORRELACION
+
+
+
+# Técnicas de reducción de dimensionalidad
+
+## Método StepWise
+
+```{r}
+
+#Dividimos el conjunto de datos para el entrenamiento y para la evaluación
+set.seed(9202)
+rand_num <- runif(nrow(datos_final_sc))
+
+test <- datos_final_sc[rand_num>0.7,-60]
+match_reales_test <- datos_final[rand_num>0.7, 'match']
+match_train <- as.data.frame(datos_balanceados[rand_num<=0.7,'match'])
+colnames(match_train) <- 'match'
+
+datos_final <- datos_final[rand_num <=0.7, ]
+datos_final_sc <- datos_final_sc[rand_num <= 0.7, ]
+
+#Verificamos que los datasets de entrenamiento y validación están balanceados.
+ggplot(datos_final_sc, aes(x = factor(match))) +
+  geom_bar() +
+  ggtitle("Valores match conjunto de entrenamiento")
+tabla <- table(match_reales_test)
+ggplot() + 
+  geom_col(data = as.data.frame(tabla), aes(x = match_reales_test, y = Freq)) + 
+  labs(x = "Valor", y = "Frecuencia") + 
+  ggtitle("Valores match conjunto de test")
+
+
+# SELECCION POR METODO STEPWISE 
+modelo <- lm(match ~ . , data = datos_final_sc)
+summary(modelo)
+r2_modelo1 <- summary(modelo)$adj.r
+modelo_aic <- AIC(modelo)
+modelo_bic <- BIC(modelo)
+variables_modelo1 <- names(coef(modelo))[-1]
+```
+
+```{r}
+#vemos como funciona el nuevo modelo optimizando el AIC
+modelo2<- step(modelo, direction = 'both', trace = 0, k=2)
+summary(modelo2)
+r2_modelo2 <- summary(modelo2)$adj.r
+
+modelo2_aic <- AIC(modelo2)
+modelo2_bic <- BIC(modelo2)
+variables_modelo2 <- names(coef(modelo2))[-1] # se omite el primer elemento (Intercept)
+
+#se ha quedado con unas 30 variables, la mitad del dataset original.
+```
+
+```{r}
+modelo2$anova
+#ELIMINA TODAS ESTAS VARIABLES HASTA QUEDARSE CON EL MEJOR VALOR AIC
+```
+
+```{r}
+#sustituimos el k=2 por log(n) para optimizar el BIC
+modelo3<- step(modelo, direction = 'both', trace = 0, k=log(1365))
+summary(modelo3)
+r2_modelo3 <- summary(modelo3)$adj.r
+modelo3_aic <- AIC(modelo3)
+modelo3_bic <- BIC(modelo3)
+variables_modelo3 <- names(coef(modelo3))[-1]
+```
+
+## Regresión de mejores subconjuntos
+```{r}
+library(leaps)
+modelo_subsets <- regsubsets(match ~ ., data = datos_final_sc, nvmax=10, really.big = T)
+```
+
+```{r}
+#esta salida nos da los mejores modelos de cada tamaño.
+set.seed(9202)
+subsets_summary <- summary(modelo_subsets)
+```
+
+```{r}
+subsets_summary
+which.min(subsets_summary$bic)
+plot(subsets_summary$bic, xlab = 'Numero de variables', ylab = 'BIC', type = 'l')
+
+plot(modelo_subsets, scale = 'bic')
+variables_fuerza <- names(coef(modelo_subsets, 10))[-1]
+print('Las variables más importantes según este método son: ')
+variables_fuerza
+#habría sido conveniente ver como influiria en este análisis haber puesto como máximo de variables
+#todas menos 'match' pero debido a la potencia de mi portátil tardaba demasiado.
+```
+
+## Selección de variables por LASSO
+```{r}
+library('glmnet')
+x = as.matrix(datos_final[,1:59])
+y =  datos_final[,60]
+
+modelo_lasso <- glmnet(x,y, family= 'binomial', alpha=1)
+lasso_coefs <- coef(modelo_lasso, s=0)
+sorted_indices <- order(abs(lasso_coefs), decreasing = TRUE)
+variables_lasso <- head(names(datos_final_sc)[sorted_indices-1],15) 
+#15 variables mas importantes en lasso
+print('Las variables más importantes según el metodo de Lasso son: ')
+variables_lasso
+
+```
+
+```{r}
+#observamos que la regresion lasso elimina la variable funny important
+tail(modelo_lasso$dev.ratio, 1)
+
+#de momento es el r2 mas alto al que hemos llegado. 
+```
+
+
+## Selección de variables por método RIDGE
+```{r}
+#PROBEMOS CON LA REGRESION RIDGE
+
+modelo_ridge <- glmnet(x,y, family= 'binomial', alpha=0)
+coef(modelo_ridge, s=0)
+tail(modelo_ridge$dev.ratio, 1)
+
+#tiene un menor r^2 por lo que tomaremos en cuenta el conjunto de variables más importantes en lasso
+
+```
+
+## Método mediante umbral de correlaciones
+```{r}
+library(corrplot)
+correlaciones <- cor(datos_final, method = "pearson")
+
+
+# Seleccionar las variables con correlación mayor a 0.075
+variables_seleccionadas <- correlaciones["match", ][abs(correlaciones["match", ]) > 0.075]
+orden <- order(abs(variables_seleccionadas), decreasing = TRUE)
+variables_seleccionadas <- variables_seleccionadas[orden]
+variables_corr <- names(variables_seleccionadas)[-1] #18 variables con mas correlacion
+
+# Crear un gráfico de barras para las variables seleccionadas
+barplot(as.vector(variables_seleccionadas[-1]), 
+        names.arg = names(variables_seleccionadas[-1]), 
+        main = "Correlaciones con 'match'", 
+        ylab = "Correlación",
+        cex.names = 0.7,
+        las = 2)
+```
+
+# Recopilamos métricas según conjunto de datos utilizado
+```{r}
+datos_fuerza <- datos_final_sc[,variables_fuerza]
+datos_fuerza <- cbind(datos_fuerza, datos_final_sc['match'])
+modelo_fuerza_ <- lm(match ~ ., data = datos_fuerza)
+modelo_fuerza_aic <- AIC(modelo_fuerza_)
+modelo_fuerza_bic <- BIC(modelo_fuerza_)
+r2_modelo_fuerza <- summary(modelo_fuerza_)$adj.r
+
+
+datos_lasso <- cbind(datos_final_sc[variables_lasso], datos_final_sc['match'])
+modelo_lasso_ <- lm(match ~., data = datos_lasso)
+modelo_lasso_aic <- AIC(modelo_lasso_)
+modelo_lasso_bic <- BIC(modelo_lasso_)
+r2_modelo_lasso <- summary(modelo_lasso_)$adj.r
+
+datos_corr <- cbind(datos_final_sc[variables_corr], datos_final_sc['match'])
+modelo_corr_ <- lm(match~., data = datos_corr)
+modelo_corr_aic <- AIC(modelo_corr_)
+modelo_corr_bic <- BIC(modelo_corr_)
+r2_modelo_corr <- summary(modelo_corr_)$adj.r
+
+
+AIC_s <- c(modelo_aic, modelo2_aic, modelo3_aic, modelo_fuerza_aic, modelo_lasso_aic, modelo_corr_aic)
+which.min(AIC_s)
+
+BIC_s <- c(modelo_bic, modelo2_bic, modelo3_bic, modelo_fuerza_bic, modelo_lasso_bic, modelo_corr_bic)
+which.min(BIC_s)
+
+R2 <- c(r2_modelo1, r2_modelo2, r2_modelo3, r2_modelo_fuerza, r2_modelo_lasso, r2_modelo_corr)
+
+
+nmodelos <- c("modelo1", "modelo2", "modelo3", "modelo_fuerza", "modelo_lasso", "modelo_corr")
+numero_vars <- c(length(variables_modelo1), length(variables_modelo2), 
+                 length(variables_modelo3), length(variables_fuerza), length(variables_lasso), 
+                 length(variables_corr))
+comparacion <- data.frame(nmodelos, numero_vars, AIC_s, BIC_s, R2)
+comparacion
+
+library(ggplot2)
+ggplot(comparacion, aes(x = nmodelos, y = AIC_s-3200)) +
+  geom_bar(stat = 'identity', fill = '#990000') +
+  labs(x = 'Modelos', y = 'AIC') +
+  scale_y_continuous(expand = c(0,0)) +
+  geom_text(aes(label = AIC_s), size = 3, vjust = 1.5,  color = 'white') + 
+  theme(axis.text.y = element_blank())
+
+ggplot(comparacion, aes(x = nmodelos, y = BIC_s-3200)) +
+  geom_bar(stat = 'identity', fill = '#FFC107') +
+  labs(x = 'Modelos', y = 'BIC') +
+  scale_y_continuous(expand = c(0,0)) +
+  geom_text(aes(label = AIC_s), size = 3, vjust = 1.5) + 
+  theme(axis.text.y = element_blank())
+
+
+ggplot(comparacion, aes(x = nmodelos, y = R2-0.25)) +
+  geom_bar(stat = 'identity', fill = '#7FFF00') +
+  labs(x = 'Modelos', y = 'Adjusted R^2') +
+  geom_text(aes(label = R2), size = 2.75, vjust = 1.5) + 
+  theme(axis.text.y = element_blank())
+```
+Según estás gráficas el mejor modelo en cuanto a AIC y a R^2 se refiere es el modelo 2 
+(usando stepwise de ambas direcciones), en cuanto a BIC es el modelo por
+regresión de subsets.
+
+
+# Regresión logística y cálculo de predicciones con la partición de test.
+```{r}
+
+modelo2_log <- glm(match ~., data = as.data.frame(apply(cbind(datos_final_sc[variables_modelo2], match_train), 2, function(x) (x - min(x)) / (max(x) - min(x)))), family = 'binomial' )
+summary(modelo2_log)
+
+summary(modelo2_log)
+```
+
+```{r}
+library('DescTools')
+efron_model2 <- PseudoR2(modelo2_log, "Efron")
+nagel_model2 <- PseudoR2(modelo2_log, "Nagelkerke")
+aic_model2 <-AIC(modelo2_log)
+```
+
+## Predicciones modelo 2 (31 variables por metodo stepwise ambas direcciones)
+```{r}
+library('pROC')
+predicciones_model2 = predict(modelo2_log, newdata = as.data.frame(apply(test[variables_modelo2], 2, function(x) (x - min(x)) / (max(x) - min(x)))), type = 'response')
+tabla_model2 <- table(match_reales_test, ifelse(predicciones_model2>= 0.5,1,0))
+curva_roc_modelo2 <- roc(match_reales_test, predicciones_model2)
+plot(curva_roc_modelo2)
+porcentaje_aciertos_model2 <- sum(diag(tabla_model2))/sum(tabla_model2)*100
+porcentaje_aciertos_model2
+
+
+
+predicciones_model2 = ifelse(predict(modelo2_log, newdata = as.data.frame(apply(test[variables_modelo2], 2, function(x) (x - min(x)) / (max(x) - min(x)))), type = 'response') >= 0.5, 1,0)
+
+```
+
+
+```{r}
+data_model1 = as.data.frame(apply(datos_final_sc, 2, function(x) (x - min(x)) / (max(x) - min(x))))
+modelo1_log <- glm(match ~., data = data_model1, family = 'binomial' )
+summary(modelo1_log)
+
+```
+
+```{r}
+efron_model1 <- PseudoR2(modelo1_log, "Efron")
+nagel_model1 <- PseudoR2(modelo1_log, "Nagelkerke")
+aic_model1 <- AIC(modelo1_log)
+```
+
+
+## Predicciones modelo 1 (todas las variables)
+```{r}
+predicciones_model1 = predict(modelo1_log, newdata = as.data.frame(apply(test, 2, function(x) (x - min(x)) / (max(x) - min(x)))), type = 'response')
+tabla_model1 <- table(match_reales_test, ifelse(predicciones_model1>=0.5,1,0))
+curva_roc_modelo1 <- roc(match_reales_test, predicciones_model1)
+plot(curva_roc_modelo1)
+porcentaje_aciertos_model1 <- sum(diag(tabla_model1))/sum(tabla_model1)*100
+porcentaje_aciertos_model1
+
+```
+
+```{r}
+modelo_lasso_log <- glm(match ~., data = as.data.frame(apply(datos_lasso, 2, function(x) (x - min(x)) / (max(x) - min(x)))), family = 'binomial' )
+summary(modelo_lasso_log)
+
+efron_model_lasso <- PseudoR2(modelo_lasso_log, "Efron")
+nagel_model_lasso <- PseudoR2(modelo_lasso_log, "Nagelkerke")
+aic_model_lasso <- AIC(modelo_lasso_log)
+```
+## Predicciones modelo lasso (15 variables)
+
+```{r}
+predicciones_model_lasso = predict(modelo_lasso_log, newdata = as.data.frame(apply(test[variables_lasso], 2, function(x) (x - min(x)) / (max(x) - min(x)))), type = 'response')
+tabla_model_lasso <- table(match_reales_test, ifelse(predicciones_model_lasso>=0.5, 1,0))
+curva_roc_model_lasso <- roc(match_reales_test, predicciones_model_lasso)
+
+plot(curva_roc_model_lasso)
+porcentaje_aciertos_model_lasso <- sum(diag(tabla_model_lasso))/sum(tabla_model_lasso)*100
+porcentaje_aciertos_model_lasso
+
+```
+
+```{r}
+modelo_corr_log <- glm(match ~., data = as.data.frame(apply(datos_corr, 2, function(x) (x - min(x)) / (max(x) - min(x)))), family = 'binomial' )
+summary(modelo_corr_log)
+
+efron_model_corr <- PseudoR2(modelo_corr_log, "Efron")
+nagel_model_corr <- PseudoR2(modelo_corr_log, "Nagelkerke")
+aic_model_corr <- AIC(modelo_corr_log)
+```
+
+## Predicciones modelo correlaciones (17 variables)
+```{r}
+predicciones_model_corr = predict(modelo_corr_log, newdata = as.data.frame(apply(test[variables_corr], 2, function(x) (x - min(x)) / (max(x) - min(x)))), type = 'response')
+tabla_model_corr <- table(match_reales_test, ifelse(predicciones_model_corr>=0.5,1,0))
+curva_roc_model_corr <- roc(match_reales_test, predicciones_model_corr)
+
+plot(curva_roc_model_corr)
+
+porcentaje_aciertos_model_corr <- sum(diag(tabla_model_corr))/sum(tabla_model_corr)*100
+porcentaje_aciertos_model_corr
+
+
+```
+
+```{r}
+modelo_fuerza_log <- glm(match ~., data = as.data.frame(apply(datos_fuerza, 2, function(x) (x - min(x)) / (max(x) - min(x)))), family = 'binomial' )
+summary(modelo_fuerza_log)
+
+efron_model_fuerza <- PseudoR2(modelo_fuerza_log, "Efron")
+nagel_model_fuerza <- PseudoR2(modelo_fuerza_log, "Nagelkerke")
+aic_model_fuerza <- AIC(modelo_fuerza_log)
+```
+
+## Predicciones modelo regresión de mejores subsets (10 variables)
+```{r}
+predicciones_model_fuerza = predict(modelo_fuerza_log, newdata = as.data.frame(apply(test[variables_fuerza], 2, function(x) (x - min(x)) / (max(x) - min(x)))), type = 'response')
+tabla_model_fuerza <- table(match_reales_test, ifelse(predicciones_model_fuerza >= 0.5,1,0))
+curva_roc_model_fuerza <- roc(match_reales_test, predicciones_model_fuerza)
+plot(curva_roc_model_fuerza)
+porcentaje_aciertos_model_fuerza <- sum(diag(tabla_model_fuerza))/sum(tabla_model_fuerza)*100
+porcentaje_aciertos_model_fuerza
+
+```
+
+# Comparación de r^2, aic y precisión de los diferentes modelos de regresión logística
+```{r}
+precision <- c(porcentaje_aciertos_model2, porcentaje_aciertos_model1, porcentaje_aciertos_model_lasso, porcentaje_aciertos_model_corr, porcentaje_aciertos_model_fuerza)
+
+efron <- c(efron_model2, efron_model1, efron_model_lasso, efron_model_corr, efron_model_fuerza)
+
+nagel <- c(nagel_model2, nagel_model1, nagel_model_lasso, nagel_model_corr, nagel_model_fuerza)
+
+aic_log <- c(aic_model2, aic_model1, aic_model_lasso, aic_model_corr, aic_model_fuerza)
+
+nmodelos <- c('modelo2', 'modelo1', 'modelo lasso', 'modelo corr', 'modelo fuerza')
+
+comparacion2 <- data.frame(nmodelos, efron, nagel, aic_log, precision)
+comparacion2
+
+```
+El modelo con mejor porcentaje de predicción es el modelo por lasso, el cual tiene 15 variables y el modelo por correlaciones.
+```{r}
+plot(curva_roc_modelo2, col = "blue", main = "Curva ROC", xlab = "Tasa de Falsos Positivos", ylab = "Tasa de Verdaderos Positivos")
+lines(curva_roc_modelo1, col='red', print.auc = TRUE)
+lines(curva_roc_model_lasso, col='green')
+lines(curva_roc_model_corr, col = 'purple')
+lines(curva_roc_model_fuerza, col = 'orange')
+legend('bottomright', title = 'Curva y área bajo la curva ROC según modelo',
+                                 legend = c(paste('Modelo2:', round(curva_roc_modelo2$auc,3)), 
+                                 paste('Modelo1', round(curva_roc_modelo1$auc, 3)), 
+                                 paste('Modelo Lasso', round(curva_roc_model_lasso$auc,3)), 
+                                 paste('Modelo Correlaciones', round(curva_roc_model_corr$auc, 3)), 
+                                 paste('Modelo Regresión subsets', round(curva_roc_model_fuerza$auc,3))), 
+                                 col = c('blue', 'red', 'green', 'purple', 'orange'),cex = 0.9, lty=1, lwd = 2)
+            
+```
+# Naive Bayes
+Es conveniente usar este método ya que el número de variables es bastante grande. Vamos a ver
+su rendimiento con el conjunto de datos más conveniente devuelto por el modelo 1 y el modelo 
+2 ya que son los que tienen mayor número de variables
+```{r}
+library('e1071')
+modelo_nb <- naiveBayes(match ~.,cbind(datos_final_sc[variables_modelo1], match_train))
+modelo_nb
+```
+
+```{r}
+preds_nb <- predict(modelo_nb, test[variables_modelo1], type = 'class')
+preds_nb2 <- predict(modelo_nb, test[variables_modelo1], type = 'raw')[,1]
+```
+
+```{r}
+tabla_model_nb <- table(match_reales_test, preds_nb)
+porcentaje_aciertos_model_nb <- sum(diag(tabla_model_nb))/sum(tabla_model_nb)*100
+porcentaje_aciertos_model_nb
+
+curva_roc_model_nb <- roc(match_reales_test, preds_nb2)
+plot(curva_roc_model_nb, main = paste("Curva ROC Modelo NaiveBayes ( AUC =", round(curva_roc_model_nb$auc, 3),')'))
+```
+
+```{r}
+modelo_nb2 <- naiveBayes(match ~.,cbind(datos_final_sc[variables_modelo2], match_train))
+modelo_nb2
+
+```
+
+
+
+```{r}
+preds_nb_2 <- predict(modelo_nb2, test[variables_modelo2], type = 'class')
+preds_nb2_2 <- predict(modelo_nb2, test[variables_modelo2], type = 'raw')[,1]
+```
+
+
+```{r}
+tabla_model_nb2 <- table(match_reales_test, preds_nb_2)
+porcentaje_aciertos_model_nb2 <- sum(diag(tabla_model_nb2))/sum(tabla_model_nb2)*100
+porcentaje_aciertos_model_nb2
+
+curva_roc_model_nb2 <- roc(match_reales_test, preds_nb2_2)
+plot(curva_roc_model_nb2, main = paste("Curva ROC Modelo NaiveBayes ( AUC =", round(curva_roc_model_nb2$auc, 3),')'))
+```
+
+# Comparación de modelos
+```{r}
+plot(curva_roc_model_lasso, col = "blue", main = "Curva ROC", xlab = "Tasa de Falsos Positivos", ylab = "Tasa de Verdaderos Positivos")
+lines(curva_roc_model_corr, col = 'purple')
+lines(curva_roc_model_nb, col = 'orange')
+lines(curva_roc_model_nb2, col = 'green')
+legend('bottomright', title = 'Curva y área bajo la curva ROC según modelo',
+                                legend = c(paste('Modelo Lasso', round(curva_roc_model_lasso$auc,3)),
+                                paste('Modelo Correlaciones', round(curva_roc_model_corr$auc, 3)),
+                                paste('Modelo Naive Bayes 1 (59 vars)', round(curva_roc_model_nb$auc,3)),
+                                paste('Modelo Naive Bayes 2 (31 vars)', round(curva_roc_model_nb2$auc,3))),
+                                col = c('blue', 'purple', 'orange', 'green'),cex = 0.9, lty=1, lwd = 2)
+```
+Según el área bajjo la curva ROC el mejor modelo es el modelo de regresión logística calculado con las
+15 variables más correladas con la variable objetivo 'match', aunque le siguen de cerca los demás
+modelos.
+```{r}
+modelo_usado <- c('Regresión Logística', 'Regresión Logística', 'Naive Bayes', 'Naive Bayes')
+numero_vars <- c(length(variables_corr), length(variables_lasso), 59, length(variables_modelo2))
+metodo_extraccion_vars <- c('Correlaciones', 'Lasso', 'Todas las variables', 'Stepwise')
+precision_final <- c(porcentaje_aciertos_model_corr, porcentaje_aciertos_model_lasso, porcentaje_aciertos_model_nb, porcentaje_aciertos_model_nb2)
+auc_final <- c(round(curva_roc_model_corr$auc,3), round(curva_roc_model_lasso$auc,3), round(curva_roc_model_nb$auc,3), round(curva_roc_model_nb2$auc,3))
+
+comparacion_final <- data.frame(modelo_usado, numero_vars, metodo_extraccion_vars, precision_final, auc_final)
+comparacion_final
+```
+
+En este último resumen final, vemos que los 4 modelos funcionan de forma muy similar. 
+Por el mayor rendimiento en el valor del área bajo la curva y al ser un modulo
+con un número razonable de variables, me quedaría con el modelo de regresión logística
+por correlaciones (ya que elige de forma intuitiva las variables y no es del todo complejo.)
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
